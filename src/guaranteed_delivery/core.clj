@@ -51,23 +51,47 @@
 (defprotocol Receiver
   (recv-msgs [_ n-msgs]))
 
-(defrecord NaiveSender [in-pipe out-pipe]
-  Sender
-  (send-msgs [_ msgs]
-    (doseq [m msgs]
-      (do
-        (sendpkt out-pipe (str->byte-vec m))
-        (recvpkt in-pipe)))))
+(defn into-camel-case
+  [w]
+  (reduce #(cond
+             (= (second %2) \-) %1
+             (= (first %2) \-) (str %1 (clojure.string/upper-case (str (second %2))))
+             :default (str %1 (second %2)))
+          (clojure.string/upper-case (str (first w)))
+          (map vector w (rest w))))
 
-(defrecord NaiveReceiver [in-pipe out-pipe]
-  Receiver
-  (recv-msgs [_ n-msgs]
-    (letfn [(get-msg []
-              (let [msg (byte-vec->str (recvpkt in-pipe))]
-                ;; Send an ACK
-                (sendpkt out-pipe [1])
-                msg))]
-      (vec (doall (repeatedly n-msgs get-msg))))))
+(defmacro senderfn->Sender
+  [senderfn]
+  `(defrecord ~(symbol (into-camel-case (str senderfn)))
+       [in-pipe# out-pipe#]
+     Sender
+     (send-msgs [_ msgs#]
+       (~senderfn msgs# in-pipe# out-pipe#))))
+
+(defmacro receiverfn->Receiver
+  [receiverfn]
+  `(defrecord ~(symbol (into-camel-case (str receiverfn)))
+       [in-pipe# out-pipe#]
+     Receiver
+     (recv-msgs [_ n-msgs#]
+       (~receiverfn n-msgs# in-pipe# out-pipe#))))
+
+(defn naive-sender
+  [msgs in-pipe out-pipe]
+  (doseq [m msgs]
+    (do
+      (sendpkt out-pipe (str->byte-vec m))
+      (recvpkt in-pipe))))
+(senderfn->Sender naive-sender)
+
+(defn naive-receiver [n-msgs in-pipe out-pipe]
+  (letfn [(get-msg []
+            (let [msg (byte-vec->str (recvpkt in-pipe))]
+              ;; Send an ACK
+              (sendpkt out-pipe [1])
+              msg))]
+    (vec (doall (repeatedly n-msgs get-msg)))))
+(receiverfn->Receiver naive-receiver)
 
 (defn count-errors
   ([L1 L2] (count-errors L1 L2 0))
@@ -99,9 +123,7 @@
         sender (make-sender receiver->sender sender->receiver)
         receiver (make-receiver sender->receiver receiver->sender)
         start-time (System/currentTimeMillis)]
-    (println (str "Sending " (count msgs) " messages."))
+    (println (str "Sending " (count msgs) " messages"))
     (.start (Thread. #(send-msgs sender msgs)))
-    (println (str (count-errors msgs (recv-msgs receiver (count msgs))) " errors."))
-    (println (str "Sending took " (- (System/currentTimeMillis) start-time) "ms."))))
-
-
+    (println (str (count-errors msgs (recv-msgs receiver (count msgs))) " errors"))
+    (println (str "Sending took " (- (System/currentTimeMillis) start-time) "ms"))))
