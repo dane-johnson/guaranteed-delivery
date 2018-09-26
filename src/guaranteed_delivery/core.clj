@@ -39,9 +39,8 @@
 
 (defn recvpkt
   [pipe]
-  (while (empty? @pipe)
-    ;; Dirty spin-lock. Must do something about this later.
-    (Thread/sleep 1))
+  ;; Dirty spin-lock. Must do something about this later.
+  (while (empty? @pipe))
   (let [out (peek @pipe)]
     (swap! pipe pop)
     out))
@@ -79,14 +78,26 @@
      :default
      (recur (pop L1) (pop L2) (if (= (peek L1) (peek L2)) errors (inc errors))))))
 
+(defn parse-protocol-str
+  [protocol-str]
+  (case (clojure.string/lower-case protocol-str)
+    "naive" [->NaiveSender ->NaiveReceiver]
+    (do (println (str "Error, unknown protocol " protocol-str))
+        (System/exit 2))))
+
 (defn -main
   "I don't do a whole lot ... yet."
   [& args]
-  (let [sender->receiver (make-pipe)
+  (if-not (= (count args) 2)
+    (do
+      (println "Usage: guaranteed-delivery inputfile protocol")
+      (System/exit 1)))
+  (let [[make-sender make-receiver] (parse-protocol-str (second args))
+        sender->receiver (make-pipe)
         receiver->sender (make-pipe)
         msgs (vec (clojure.string/split-lines (slurp (first args))))
-        sender (->NaiveSender receiver->sender sender->receiver)
-        receiver (->NaiveReceiver sender->receiver receiver->sender)
+        sender (make-sender receiver->sender sender->receiver)
+        receiver (make-receiver sender->receiver receiver->sender)
         start-time (System/currentTimeMillis)]
     (println (str "Sending " (count msgs) " messages."))
     (.start (Thread. #(send-msgs sender msgs)))
