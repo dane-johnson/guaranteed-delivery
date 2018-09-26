@@ -39,7 +39,10 @@
 
 (defn byte-vec->int
   [bv]
-  (reduce #(+ %1 (bit-shift-left (first %2) (second %2))) 0 (map vector bv [24 16 8 0])))
+  (let [unsigned (reduce #(+ %1 (bit-shift-left (first %2) (second %2))) 0 (map vector bv [24 16 8 0]))]
+    (if (<= unsigned Integer/MAX_VALUE)
+      unsigned
+      (- (inc (bit-xor unsigned 0xffffffff))))))
 
 (defn sendpkt
   [pipe pkt]
@@ -71,10 +74,10 @@
 (defmacro senderfn->Sender
   [senderfn]
   `(defrecord ~(symbol (into-camel-case (str senderfn)))
-       [in-pipe# out-pipe#]
+       [~'in-pipe ~'out-pipe]
      Sender
      (send-msgs [_ msgs#]
-       (~senderfn msgs# in-pipe# out-pipe#))))
+       (~senderfn msgs# ~'in-pipe ~'out-pipe))))
 
 (defmacro receiverfn->Receiver
   [receiverfn]
@@ -95,16 +98,46 @@
 
 (defn naive-receiver [n-msgs in-pipe out-pipe]
   "Receives all messages at once"
-  (letfn [(get-msg []
-            (let [msg (byte-vec->str (recvpkt in-pipe))]
-              msg))]
-    (vec (doall (repeatedly n-msgs get-msg)))))
+  (vec (doall (repeatedly n-msgs #(byte-vec->str (recvpkt in-pipe))))))
 (receiverfn->Receiver naive-receiver)
 
-(defn checked-msg-sender
+(defn checked-sender
   [msgs in-pipe out-pipe]
   (doseq [m msgs]
-    (let [pkt (conj ms)])))
+    (let [pkt (concat (int->byte-vec (hash m)) (str->byte-vec m))]
+      (sendpkt out-pipe pkt)
+      ;; While we get NACK
+      (while (let [pkt (recvpkt in-pipe)
+                   check (byte-vec->int (take 4))
+                   sig (byte-vec->int (drop 4))]
+               (or (not= check (hash sig)) ((comp not zero?) sig)))
+        ;; Resend the packet
+        (sendpkt out-pipe pkt)))))
+(senderfn->Sender checked-sender)
+
+(defn checked-receiver
+  [n-msgs in-pipe out-pipe]
+  (letfn [(read-pkt []
+            (let [pkt (recvpkt in-pipe)
+                  check (byte-vec->int (take 4 pkt))
+                  msg (byte-vec->str (drop 4 pkt))]
+              [check msg]))
+          (valid? [check msg]
+            (= (hash msg) check))]
+    (vec (doall (repeatedly n-msgs
+                            #(loop [[check msg] (read-pkt)]
+                               (if (valid? check msg)
+                                 (do
+                                   ;; Send ACK
+                                   (sendpkt out-pipe (concat (int->byte-vec (hash 0))
+                                                             (int->byte-vec 0)))
+                                   msg)
+                                 (do
+                                   ;; Send NACK
+                                   (sendpkt out-pipe (concat (int->byte-vec (hash 0))
+                                                             (int->byte-vec 1)))
+                                   (recur (read-pkt))))))))))
+(receiverfn->Receiver checked-receiver)
 
 (defn count-errors
   ([L1 L2] (count-errors L1 L2 0))
@@ -119,6 +152,7 @@
   [protocol-str]
   (case (clojure.string/lower-case protocol-str)
     "naive" [->NaiveSender ->NaiveReceiver]
+    "checked" [->CheckedSender ->CheckedReceiver]
     (do (println (str "Error, unknown protocol " protocol-str))
         (System/exit 2))))
 
