@@ -80,15 +80,13 @@
   [msgs in-pipe out-pipe]
   (doseq [m msgs]
     (do
-      (sendpkt out-pipe (str->byte-vec m))
-      (recvpkt in-pipe))))
+      (sendpkt out-pipe (str->byte-vec m)))))
+
 (senderfn->Sender naive-sender)
 
 (defn naive-receiver [n-msgs in-pipe out-pipe]
   (letfn [(get-msg []
             (let [msg (byte-vec->str (recvpkt in-pipe))]
-              ;; Send an ACK
-              (sendpkt out-pipe [1])
               msg))]
     (vec (doall (repeatedly n-msgs get-msg)))))
 (receiverfn->Receiver naive-receiver)
