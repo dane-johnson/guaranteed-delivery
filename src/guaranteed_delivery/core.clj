@@ -33,6 +33,14 @@
   [bv]
   (reduce #(str %1 (char %2)) "" bv))
 
+(defn int->byte-vec
+  [i]
+  (mapv #(-> i (bit-and %1) (bit-shift-right %2)) [0xff000000 0xff0000 0xff00 0xff] [24 16 8 0]))
+
+(defn byte-vec->int
+  [bv]
+  (reduce #(+ %1 (bit-shift-left (first %2) (second %2))) 0 (map vector bv [24 16 8 0])))
+
 (defn sendpkt
   [pipe pkt]
   (swap! pipe conj (bit-error pkt)))
@@ -78,6 +86,7 @@
 
 (defn naive-sender
   [msgs in-pipe out-pipe]
+  "Sends all messages at once"
   (doseq [m msgs]
     (do
       (sendpkt out-pipe (str->byte-vec m)))))
@@ -85,11 +94,17 @@
 (senderfn->Sender naive-sender)
 
 (defn naive-receiver [n-msgs in-pipe out-pipe]
+  "Receives all messages at once"
   (letfn [(get-msg []
             (let [msg (byte-vec->str (recvpkt in-pipe))]
               msg))]
     (vec (doall (repeatedly n-msgs get-msg)))))
 (receiverfn->Receiver naive-receiver)
+
+(defn checked-msg-sender
+  [msgs in-pipe out-pipe]
+  (doseq [m msgs]
+    (let [pkt (conj ms)])))
 
 (defn count-errors
   ([L1 L2] (count-errors L1 L2 0))
